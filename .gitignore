@@ -1,0 +1,6 @@
+*.img
+*.img.*
+*.bak
+rootfs_new
+*.log
+*.zip
