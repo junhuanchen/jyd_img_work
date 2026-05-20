@@ -11,12 +11,13 @@ CLEANED_UP=0
 SCRIPT_NAME="$(basename "$0")"
 SKIP_BACKUP=0
 BACKUP_DIR=""
+RESIZE_MB=""
 
 # ========== 帮助信息 ==========
 usage() {
     cat << EOF
 ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
-${CYAN}  ${SCRIPT_NAME}${NC}  —  IMG 镜像 losetup 挂载 / 急救工具
+${CYAN}  ${SCRIPT_NAME}${NC}  —  IMG 镜像 losetup 挂载 / 急救 / 扩容工具
 ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}
 
 ${GREEN}用法:${NC}
@@ -24,6 +25,7 @@ ${GREEN}用法:${NC}
 
 ${GREEN}选项:${NC}
   ${YELLOW}<无选项> <img>${NC}         正常模式：自动备份 → losetup -P → 挂载
+  ${YELLOW}--resize <MB>${NC}            扩容模式：扩展 img 文件并增大 rootfs 分区
   ${YELLOW}--no-backup${NC}              跳过备份（危险：修改直接落盘）
   ${YELLOW}--backup-dir <dir>${NC}       指定备份目录（默认与 img 同目录）
   ${YELLOW}--rescue <img>${NC}           精准急救：强制清理该 img 关联的所有 loop/挂载
@@ -34,6 +36,9 @@ ${GREEN}选项:${NC}
 ${GREEN}示例:${NC}
   ${DIM}# 在 img 所在目录执行（产生 ./boot 和 ./rootfs）${NC}
   cd ~/images && sudo ./${SCRIPT_NAME} 2026-05-09-15-51-b943ff.img
+
+  ${DIM}# 扩容：给 img 增加 500MB，同时扩展 rootfs 分区${NC}
+  sudo ./${SCRIPT_NAME} --resize 500 2026-05-09-15-51-b943ff.img
 
   ${DIM}# 跳过备份${NC}
   sudo ./${SCRIPT_NAME} --no-backup 2026-05-09-15-51-b943ff.img
@@ -105,7 +110,7 @@ backup_img() {
 cleanup_mounts() {
     local target_img="${1:-}"
     local aggressive="${2:-1}"
-    
+
     [[ "$CLEANED_UP" -eq 1 ]] && return
     CLEANED_UP=1
 
@@ -116,7 +121,7 @@ cleanup_mounts() {
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         local mp="$line"
-        
+
         if [[ -n "$target_img" ]]; then
             local dev=""
             dev=$(findmnt -n -o SOURCE "$mp" 2>/dev/null || true)
@@ -157,7 +162,7 @@ cleanup_mounts() {
         "${SCRIPT_DIR}/rootfs/sys"
         "${SCRIPT_DIR}/rootfs/proc"
     )
-    
+
     for bp in "${bind_points[@]}"; do
         [[ -e "$bp" ]] || continue
         if mountpoint -q "$bp" 2>/dev/null; then
@@ -218,16 +223,16 @@ cleanup_mounts() {
 # ========== 诊断状态 ==========
 show_status() {
     local target_img="${1:-}"
-    
+
     echo -e "${CYAN}========== 挂载诊断 ==========${NC}"
-    
+
     local found=0
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue
         echo "  $line"
         found=1
     done < <(mount | grep "^${SCRIPT_DIR}" || true)
-    
+
     if [[ "$found" -eq 0 ]]; then
         echo -e "${GREEN}  未发现 ${SCRIPT_DIR} 下的挂载点${NC}"
     fi
@@ -269,6 +274,139 @@ show_status() {
             echo "  ${mp}: 不存在"
         fi
     done
+}
+
+# ========== 扩容模式 ==========
+resize_mode() {
+    local img="$1"
+    local mb="$2"
+    local boot_mp="${SCRIPT_DIR}/boot"
+    local root_mp="${SCRIPT_DIR}/rootfs"
+    local loop_dev=""
+
+    [[ $EUID -ne 0 ]] && { echo -e "${RED}错误: 请使用 sudo 或 root 身份运行${NC}"; exit 1; }
+    [[ -f "$img" ]] || { echo -e "${RED}错误: 文件不存在: $img${NC}"; exit 1; }
+    img="$(realpath "$img")"
+
+    # 验证扩容大小
+    if ! [[ "$mb" =~ ^[0-9]+$ ]] || [[ "$mb" -le 0 ]]; then
+        echo -e "${RED}错误: --resize 参数必须是正整数（MB）${NC}"
+        exit 1
+    fi
+
+    echo -e "${CYAN}========== 扩容模式 ==========${NC}"
+    echo -e "${GREEN}镜像: ${img}${NC}"
+    echo -e "${GREEN}扩容: +${mb} MB${NC}"
+    echo ""
+
+    # 1. 先彻底清理挂载残留
+    echo -e "${YELLOW}>>> 步骤 1/6: 清理挂载残留${NC}"
+    cleanup_mounts "$img" 1
+    CLEANED_UP=0  # 重置，后续 trap 需要
+    sleep 1
+
+    # 2. 自动备份
+    if [[ "$SKIP_BACKUP" -eq 0 ]]; then
+        backup_img "$img"
+    else
+        echo -e "${YELLOW}>>> 已跳过备份（--no-backup）${NC}"
+        echo ""
+    fi
+
+    # 3. 扩展 img 文件
+    echo -e "${YELLOW}>>> 步骤 2/6: 扩展 img 文件 (+${mb}MB)${NC}"
+    local orig_size new_size
+    orig_size=$(du -h "$img" | cut -f1)
+    dd if=/dev/zero bs=1M count="$mb" status=progress >> "$img" || {
+        echo -e "${RED}错误: dd 扩容失败${NC}"
+        exit 1
+    }
+    new_size=$(du -h "$img" | cut -f1)
+    echo -e "${GREEN}  扩容完成: ${orig_size} → ${new_size}${NC}"
+    echo ""
+
+    # 4. losetup + 扩展分区 + resize2fs
+    echo -e "${YELLOW}>>> 步骤 3/6: 设置回环设备${NC}"
+    loop_dev=$(losetup -f --show -P "$img") || {
+        echo -e "${RED}错误: losetup 失败${NC}" >&2
+        exit 1
+    }
+    echo -e "${GREEN}  回环设备: ${loop_dev}${NC}"
+    sleep 0.3
+
+    # 等待分区节点
+    if [[ ! -b "${loop_dev}p1" ]] || [[ ! -b "${loop_dev}p2" ]]; then
+        sleep 1
+        partprobe "$loop_dev" 2>/dev/null || true
+    fi
+
+    echo ""
+    echo -e "${YELLOW}>>> 步骤 4/6: 扩展第2分区 (rootfs)${NC}"
+    echo "  当前分区表:"
+    parted -s "$loop_dev" print || true
+    echo ""
+
+    # 扩展分区到末尾
+    parted -s "$loop_dev" resizepart 2 100% || {
+        echo -e "${RED}错误: parted resizepart 失败${NC}"
+        losetup -d "$loop_dev" 2>/dev/null || true
+        exit 1
+    }
+    echo -e "${GREEN}  分区扩展完成${NC}"
+    echo ""
+
+    echo -e "${YELLOW}>>> 步骤 5/6: 检查并扩展文件系统${NC}"
+    e2fsck -f -y "${loop_dev}p2" || {
+        echo -e "${RED}错误: e2fsck 失败${NC}"
+        losetup -d "$loop_dev" 2>/dev/null || true
+        exit 1
+    }
+    resize2fs "${loop_dev}p2" || {
+        echo -e "${RED}错误: resize2fs 失败${NC}"
+        losetup -d "$loop_dev" 2>/dev/null || true
+        exit 1
+    }
+    echo -e "${GREEN}  文件系统扩展完成${NC}"
+    echo ""
+
+    # 5. 重新挂载
+    echo -e "${YELLOW}>>> 步骤 6/6: 重新挂载分区${NC}"
+    mkdir -p "$boot_mp" "$root_mp"
+
+    mount "${loop_dev}p1" "$boot_mp" || {
+        echo -e "${RED}错误: 挂载 boot 分区失败${NC}"
+        losetup -d "$loop_dev" 2>/dev/null || true
+        exit 1
+    }
+    echo -e "${GREEN}  ${loop_dev}p1 → ./boot${NC}"
+
+    mount "${loop_dev}p2" "$root_mp" || {
+        echo -e "${RED}错误: 挂载 rootfs 分区失败${NC}"
+        umount "$boot_mp" 2>/dev/null || true
+        losetup -d "$loop_dev" 2>/dev/null || true
+        exit 1
+    }
+    echo -e "${GREEN}  ${loop_dev}p2 → ./rootfs${NC}"
+
+    # 注册 trap
+    trap 'cleanup_mounts "" 1' EXIT INT TERM HUP
+
+    echo ""
+    echo -e "${CYAN}=======================================${NC}"
+    echo -e "${CYAN}  扩容完成！镜像已挂载到: ${root_mp}${NC}"
+    echo -e "${CYAN}  boot 分区: ./boot${NC}"
+    echo -e "${CYAN}  rootfs 分区: ./rootfs${NC}"
+    echo -e "${CYAN}  回环设备: ${loop_dev}${NC}"
+    echo -e "${CYAN}=======================================${NC}"
+    echo ""
+    df -h "$root_mp"
+    echo ""
+    echo -e "${YELLOW}提示: 在此 shell 中可直接编辑 rootfs 内的文件${NC}"
+    echo -e "${YELLOW}      输入 exit 退出并自动卸载${NC}"
+    echo ""
+    cd "$root_mp"
+    /bin/bash --login || true
+    cd "$SCRIPT_DIR"
 }
 
 # ========== 正常模式：备份 → losetup -P → 挂载 → 交互式 shell ==========
@@ -317,7 +455,7 @@ normal_mode() {
 
     # ====== 核心：losetup -P 自动扫描分区 ======
     echo ">>> losetup -P 设置回环设备..."
-    
+
     loop_dev=$(losetup -f --show -P "$img") || {
         echo -e "${RED}错误: losetup 失败，可能没有空闲 loop 设备${NC}" >&2
         echo "尝试运行: sudo $0 --rescue-all 释放残留"
@@ -338,7 +476,7 @@ normal_mode() {
 
     # 挂载分区
     echo ">>> 挂载分区..."
-    
+
     if [[ -b "${loop_dev}p1" ]]; then
         mount "${loop_dev}p1" "$boot_mp" || {
             echo -e "${RED}错误: 挂载 boot 分区 (${loop_dev}p1) 失败${NC}"
@@ -395,6 +533,11 @@ main() {
             --help|-h)
                 usage
                 ;;
+            --resize)
+                [[ -z "${2:-}" ]] && { echo -e "${RED}错误: --resize 需要指定 MB 数${NC}"; exit 1; }
+                RESIZE_MB="$2"
+                shift 2
+                ;;
             --no-backup)
                 SKIP_BACKUP=1
                 shift
@@ -435,7 +578,12 @@ main() {
     done
 
     [[ -z "$img_file" ]] && usage
-    normal_mode "$img_file"
+
+    if [[ -n "$RESIZE_MB" ]]; then
+        resize_mode "$img_file" "$RESIZE_MB"
+    else
+        normal_mode "$img_file"
+    fi
 }
 
 main "$@"
