@@ -10,7 +10,7 @@ sudo tar xzf alpine-minirootfs-3.16.9-armhf.tar.gz -C ./rootfs_new
 
 ### 先扩容系统，再合并才有空间保存
 
-sudo ./mount_img.sh --resize 2048 2026-06-07-16-43-98500e.img
+sudo ./mount_img.sh --resize 8192 2026-06-07-16-43-98500e.img
 
 cd ..
 
