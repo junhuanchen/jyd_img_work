@@ -18,11 +18,21 @@ sudo rsync -a --ignore-existing rootfs_new/ rootfs/
 
 sudo chroot rootfs /bin/sh
 
-apk update && apk add bash python3 build-base opencv-dev tinyalsa-dev zlib-dev cmake
+apk update
+
+apk add --repository https://mirrors.aliyun.com/alpine/v3.16/main/ bash python3 build-base opencv-dev tinyalsa-dev zlib-dev cmake
+
+下面快一些
+
+apk add --repository https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.16/main bash python3 build-base opencv-dev tinyalsa-dev zlib-dev cmake
 
 apk add libstdc++ libgcc
 
-## 拷贝 sdk https://github.com/Zluster/jyd_tdl_app 
+## 拷贝 sdk https://github.com/Zluster/jyd_tdl_app
+
+mkdir ./rootfs/mnt/git/
+
+cp -r ../jyd_tdl_app/ ./rootfs/mnt/git/jyd_tdl_app/
 
 然后得到的 img 就是了。
 
