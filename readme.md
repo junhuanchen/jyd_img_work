@@ -1,3 +1,34 @@
+## 常规制作步骤
+
+### 没系统就解压构建 rootfs
+
+wget https://dl-cdn.alpinelinux.org/alpine/v3.16/releases/armhf/alpine-minirootfs-3.16.9-armhf.tar.gz
+
+mkdir -p ./rootfs_new
+
+sudo tar xzf alpine-minirootfs-3.16.9-armhf.tar.gz -C ./rootfs_new
+
+### 先扩容系统，再合并才有空间保存
+
+sudo ./mount_img.sh --resize 2048 2026-06-07-16-43-98500e.img
+
+cd ..
+
+sudo rsync -a --ignore-existing rootfs_new/ rootfs/
+
+sudo chroot rootfs /bin/sh
+
+apk update && apk add bash python3 build-base opencv-dev tinyalsa-dev zlib-dev cmake
+
+apk add libstdc++ libgcc
+
+## 拷贝 sdk https://github.com/Zluster/jyd_tdl_app 
+
+然后得到的 img 就是了。
+
+
+## 以下为备忘命令
+
 # 1. 先安装 QEMU（如果还没装）
 
 sudo apt install qemu-user-static binfmt-support
@@ -9,15 +40,15 @@ sudo cp /usr/bin/qemu-arm-static /home/dls/jyd/rootfs/usr/bin/
 
 # 3. 用 sh 进入（Alpine 没有 bash）
 
-sudo chroot /home/dls/jyd/rootfs /bin/sh
+sudo chroot rootfs /bin/sh
 
 # 4. 进入后安装 bash（可选）
-
-apk add bash
 
 echo "nameserver 223.5.5.5" > /etc/resolv.conf
 
 echo "nameserver 8.8.8.8" > /etc/resolv.conf
+
+apk update && apk add bash python3 build-base
 
 # 在 chroot 前，先准备 Alpine 环境
 # 下载 Alpine minirootfs（armhf 版本）
@@ -44,7 +75,7 @@ sudo tar xzf alpine-minirootfs-3.16.9-armhf.tar.gz -C rootfs --overwrite
 
 sudo rsync -a --ignore-existing rootfs_new/ rootfs/
 
-sudo ./mount_img.sh 2026-05-09-15-51-b943ff.img
+sudo ./mount_img.sh 2026-06-03-14-35-b943ff.img
 
 sudo ./mount_img.sh 2026-05-18-15-02-b943ff.img
 
@@ -53,10 +84,11 @@ cd /home/dls/jyd
 # 2. 扩展 img 文件（增加 200MB）
 
 # 正常挂载
+
 sudo ./mount_img.sh 2026-05-18-15-02-b943ff.img
 
-# 扩容 500MB
-sudo ./mount_img.sh --resize 500 2026-05-18-15-02-b943ff.img
+# 扩容 2048MB
+sudo ./mount_img.sh --resize 2048 2026-05-18-15-02-b943ff.img
 
 # 扩容 1GB，跳过备份
 sudo ./mount_img.sh --resize 1024 --no-backup 2026-05-18-15-02-b943ff.img

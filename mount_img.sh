@@ -356,11 +356,17 @@ resize_mode() {
     echo ""
 
     echo -e "${YELLOW}>>> 步骤 5/6: 检查并扩展文件系统${NC}"
-    e2fsck -f -y "${loop_dev}p2" || {
-        echo -e "${RED}错误: e2fsck 失败${NC}"
+    e2fsck -f -y "${loop_dev}p2"
+    local e2fsck_exit=$?
+
+    # 0=无错误, 1=已修复, 2=已修复需重启, 都是成功
+    if [[ $e2fsck_exit -ge 4 ]]; then
+        echo -e "${RED}错误: e2fsck 失败 (退出码: $e2fsck_exit)${NC}"
         losetup -d "$loop_dev" 2>/dev/null || true
         exit 1
-    }
+    fi
+    echo -e "${GREEN}  e2fsck 完成 (退出码: $e2fsck_exit)${NC}"
+
     resize2fs "${loop_dev}p2" || {
         echo -e "${RED}错误: resize2fs 失败${NC}"
         losetup -d "$loop_dev" 2>/dev/null || true
