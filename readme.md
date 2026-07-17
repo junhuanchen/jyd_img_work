@@ -1,10 +1,10 @@
 ## 常规制作步骤
 
 # 最快方法：直接切分，不压缩
-split -b 1000M maixpy3_aiplne_0717.img maixpy3_aiplne_0717.img.
+split -b 1000M maixpy3_aiplne_0717.zip maixpy3_aiplne_0717.zip.
 
 # 合并还原
-cat maixpy3_aiplne_0717.img.* > maixpy3_aiplne_0717_restored.img
+cat maixpy3_aiplne_0717.zip.* > maixpy3_aiplne_0717_restored.zip
 
 ### 没系统就解压构建 rootfs
 
