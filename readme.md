@@ -1,5 +1,11 @@
 ## 常规制作步骤
 
+# 最快方法：直接切分，不压缩
+split -b 1000M maixpy3_aiplne_0717.img maixpy3_aiplne_0717.img.
+
+# 合并还原
+cat maixpy3_aiplne_0717.img.* > maixpy3_aiplne_0717_restored.img
+
 ### 没系统就解压构建 rootfs
 
 wget https://dl-cdn.alpinelinux.org/alpine/v3.16/releases/armhf/alpine-minirootfs-3.16.9-armhf.tar.gz
@@ -24,7 +30,9 @@ apk add --repository https://mirrors.aliyun.com/alpine/v3.16/main/ bash python3 
 
 下面快一些
 
-apk add --repository https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.16/main bash python3 build-base opencv-dev tinyalsa-dev zlib-dev cmake
+apk add --repository https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.16/main bash python3 build-base tinyalsa-dev zlib-dev cmake
+
+apk add --repository https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.16/main opencv-dev 
 
 apk add libstdc++ libgcc
 
@@ -106,3 +114,24 @@ sudo ./mount_img.sh --resize 1024 --no-backup 2026-05-18-15-02-b943ff.img
 # 5. 验证空间，剩余空间
 
 df -h rootfs
+
+# maixpy3
+
+我今天抽空迁移了我的 maixpy3 到算能平台了，提供了 image 模块 和 maix 通用的 linux 封装，屏蔽了 display 和 camera 的实现，image 模块的文档参考
+https://wiki.sipeed.com/soft/maixpy3/zh/usage/vision/maixpy3-example.html
+注意，我换了 opencv-moblie .a 静态链接实现，不支持 png 格式和 ttf 字体加载了。
+
+https://github.com/junhuanchen/MaixPy3/tree/jyd
+
+https://github.com/junhuanchen/libmaix/tree/jyd
+
+编译需要在 aiplne 镜像里进行，交叉编译提供不了 python 的编译环境，除非全部迁移到交叉编译里
+
+待会我编译的系统，也一起发出来备份，纯粹拿来编译我的 maixpy3 库的代码，后续我们基于这个环境进行 python 代码的封装即可，其他情况下，直接使用 pip install dist/maixpy3-0.5.4-cp310-cp310-linux_armv7l.whl --no-deps 完成安装
+
+编译需要的依赖
+apk add py3-pip python3-dev
+python3 -m pip install pybind11
+apk add py3-wheel py3-packaging
+
+项目名和包名可以最后修改成竞业达的 dara
