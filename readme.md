@@ -1,3 +1,20 @@
+# webdav 用法
+
+apk add rclone
+rclone serve webdav / --addr :8080 --user admin --pass yourpassword
+
+cadaver http://localhost:8080
+
+命令行管理webdav
+
+python3 -m http.server 8080 服务配置 index.html
+
+https://cdn.jsdelivr.net/npm/webdav@5.3.0/dist/
+
+有 node 和 web 版本的 webdav 提供，前端用 web 版本
+
+提供脚本测试 ./install-webdav.sh install admin secret 9999 /
+
 ## 常规制作步骤
 
 # 最快方法：直接切分，不压缩

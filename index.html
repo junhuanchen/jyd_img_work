@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebDAV 文件管理器</title>
+    <style>
+        body { font-family: -apple-system, sans-serif; max-width: 800px; margin: 20px auto; padding: 0 20px; background: #f5f5f5; }
+        .panel { background: white; border-radius: 8px; padding: 20px; margin: 10px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .file-list { min-height: 200px; }
+        .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+        .path { color: #555; word-break: break-all; }
+        .file-item { padding: 10px; border-bottom: 1px solid #eee; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; }
+        .file-item:hover { background: #f8f9fa; }
+        .file-name { background: none; color: #222; padding: 0; text-align: left; font-size: 15px; }
+        .file-name:hover { background: none; color: #0056b3; text-decoration: underline; }
+        .actions { display: flex; gap: 6px; align-items: center; }
+        .actions button, .small-button { padding: 6px 10px; font-size: 12px; }
+        .muted { color:#666; font-size:12px; }
+        .preview { margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; }
+        .preview iframe, .preview img, .preview video, .preview audio { max-width: 100%; }
+        .preview iframe { width: 100%; height: 520px; border: 1px solid #ddd; border-radius: 4px; background: white; }
+        .preview pre { white-space: pre-wrap; word-break: break-word; max-height: 520px; overflow: auto; background: #f7f7f7; padding: 12px; border-radius: 4px; }
+        .upload-area { border: 2px dashed #ccc; padding: 30px; text-align: center; border-radius: 8px; cursor: pointer; transition: all 0.3s; }
+        .upload-area:hover, .upload-area.dragover { border-color: #007bff; background: #e7f1ff; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        input { padding: 10px; margin: 5px; width: 180px; border: 1px solid #ddd; border-radius: 4px; }
+        .status { padding: 12px; margin: 10px 0; border-radius: 4px; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .info { background: #cce5ff; color: #004085; }
+    </style>
+</head>
+<body>
+    <h2>🌐 WebDAV 文件管理器</h2>
+    
+    <div class="panel">
+        <h3>连接设置</h3>
+        <input type="text" id="url" value="http://localhost:8080">
+        <input type="text" id="user" value="myuser">
+        <input type="password" id="pass" value="mypass">
+        <button onclick="connect()">连接</button>
+    </div>
+
+    <div class="panel upload-area" id="dropZone">
+        <p>📤 拖拽文件到此处上传，或点击选择文件</p>
+        <input type="file" id="fileInput" multiple style="display: none;">
+    </div>
+
+    <div class="panel file-list" id="fileList">
+        <p style="color: #999; text-align: center;">请先连接 WebDAV 服务器</p>
+    </div>
+
+    <div class="panel preview" id="previewPanel" style="display:none;"></div>
+
+    <div id="status"></div>
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/webdav@5.3.0/dist/web/index.js';
+
+        let client = null;
+        let currentPath = '/';
+        let previewUrl = '';
+
+        window.connect = async function() {
+            const url = document.getElementById('url').value.replace(/\/$/, '');
+            const user = document.getElementById('user').value;
+            const pass = document.getElementById('pass').value;
+
+            try {
+                client = createClient(url, { username: user, password: pass });
+                await client.getDirectoryContents('/');
+                currentPath = '/';
+                clearPreview();
+                await listFiles();
+                showStatus('✅ 连接成功', 'success');
+            } catch (e) {
+                showStatus('❌ 连接失败: ' + e.message, 'error');
+                client = null;
+            }
+        };
+
+        async function listFiles() {
+            if (!client) return;
+            try {
+                const contents = await client.getDirectoryContents(currentPath);
+                const list = document.getElementById('fileList');
+                const rows = contents
+                    .slice()
+                    .sort((a, b) => (a.type === b.type ? a.basename.localeCompare(b.basename) : a.type === 'directory' ? -1 : 1));
+                let html = `<div class="toolbar">
+                    <button class="small-button" onclick="goParent()" ${currentPath === '/' ? 'disabled' : ''}>上级目录</button>
+                    <strong>当前位置:</strong><span class="path">${escapeHtml(currentPath)}</span>
+                </div>`;
+                if (contents.length === 0) {
+                    list.innerHTML = html + '<p style="color:#999;text-align:center;">📂 目录为空</p>';
+                    return;
+                }
+                rows.forEach(item => {
+                    const isDir = item.type === 'directory';
+                    const safeName = escapeHtml(item.basename);
+                    const itemPath = joinPath(currentPath, item.basename);
+                    const pathArg = encodeArg(itemPath);
+                    const nameArg = encodeArg(item.basename);
+                    html += `<div class="file-item">
+                        <button class="file-name" onclick="${isDir ? `openDirectory('${pathArg}')` : `previewFile('${pathArg}','${nameArg}')`}">
+                            ${isDir ? '📁' : '📄'} <strong>${safeName}</strong>
+                        </button>
+                        <span class="actions">
+                            <span class="muted">${isDir ? '' : formatSize(item.size)}</span>
+                            ${isDir ? `<button onclick="openDirectory('${pathArg}')">打开</button>` : `<button onclick="previewFile('${pathArg}','${nameArg}')">预览</button><button onclick="downloadFile('${pathArg}','${nameArg}')">下载</button>`}
+                        </span>
+                    </div>`;
+                });
+                list.innerHTML = html;
+            } catch (e) {
+                showStatus('获取列表失败: ' + e.message, 'error');
+            }
+        }
+
+        window.openDirectory = async function(path) {
+            currentPath = normalizePath(decodeArg(path));
+            clearPreview();
+            await listFiles();
+        };
+
+        window.goParent = async function() {
+            if (currentPath === '/') return;
+            const parts = currentPath.split('/').filter(Boolean);
+            parts.pop();
+            currentPath = parts.length ? '/' + parts.join('/') + '/' : '/';
+            clearPreview();
+            await listFiles();
+        };
+
+        window.downloadFile = async function(path, filename) {
+            if (!client) return;
+            path = decodeArg(path);
+            filename = decodeArg(filename);
+            try {
+                showStatus(`⏳ 正在下载 ${filename}...`, 'info');
+                const blob = await getFileBlob(path);
+                saveBlob(blob, filename);
+                showStatus(`✅ ${filename} 已开始下载`, 'success');
+            } catch (e) {
+                showStatus(`❌ 下载失败: ${e.message}`, 'error');
+            }
+        };
+
+        window.previewFile = async function(path, filename) {
+            if (!client) return;
+            path = decodeArg(path);
+            filename = decodeArg(filename);
+            const panel = document.getElementById('previewPanel');
+            try {
+                clearPreview();
+                showStatus(`⏳ 正在加载预览 ${filename}...`, 'info');
+                const blob = await getFileBlob(path);
+                previewUrl = URL.createObjectURL(blob);
+                panel.style.display = 'block';
+                panel.innerHTML = renderPreview(blob, path, filename, previewUrl);
+                showStatus(`✅ 已加载预览: ${filename}`, 'success');
+            } catch (e) {
+                showStatus(`❌ 预览失败: ${e.message}`, 'error');
+            }
+        };
+
+        async function uploadFiles(files) {
+            if (!client) { showStatus('❌ 请先连接服务器', 'error'); return; }
+            
+            for (const file of files) {
+                try {
+                    showStatus(`⏳ 上传 ${file.name}...`, 'info');
+                    
+                    await putFileBlob(joinPath(currentPath, file.name), file);
+                    showStatus(`✅ ${file.name} 上传成功`, 'success');
+                    await listFiles();
+                } catch (e) {
+                    showStatus(`❌ 上传失败: ${e.message}`, 'error');
+                    console.error(e);
+                }
+            }
+        }
+
+        // 事件绑定...
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => { if(e.target.files.length){ uploadFiles(e.target.files); fileInput.value=''; }});
+        dropZone.addEventListener('dragover', (e) => e.preventDefault());
+        dropZone.addEventListener('drop', (e) => { e.preventDefault(); if(e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); });
+
+        function showStatus(msg, type) {
+            document.getElementById('status').innerHTML = `<div class="status ${type}">${escapeHtml(msg)}</div>`;
+        }
+        function formatSize(bytes) {
+            if(!bytes) return '';
+            const k=1024, sizes=['B','KB','MB','GB'];
+            const i=Math.floor(Math.log(bytes)/Math.log(k));
+            return parseFloat((bytes/Math.pow(k,i)).toFixed(1))+sizes[i];
+        }
+        async function getFileBlob(path) {
+            const data = await client.getFileContents(path, { format: 'binary' });
+            return new Blob([data], { type: guessMime(path) });
+        }
+        async function putFileBlob(path, file) {
+            const data = await file.arrayBuffer();
+            await client.putFileContents(path, data, {
+                overwrite: true,
+                contentLength: file.size,
+                headers: { 'Content-Type': file.type || 'application/octet-stream' }
+            });
+        }
+        function saveBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+        function renderPreview(blob, path, filename, url) {
+            const type = blob.type && blob.type !== 'application/octet-stream' ? blob.type : guessMime(filename);
+            const title = `<h3>预览: ${escapeHtml(filename)}</h3>`;
+            if (type.startsWith('image/')) return `${title}<img src="${url}" alt="${escapeAttr(filename)}">`;
+            if (type.startsWith('video/')) return `${title}<video src="${url}" controls></video>`;
+            if (type.startsWith('audio/')) return `${title}<audio src="${url}" controls></audio>`;
+            if (type === 'application/pdf') return `${title}<iframe src="${url}" title="${escapeAttr(filename)}"></iframe>`;
+            if (type.startsWith('text/') || /\.(json|xml|md|log|csv|ini|conf|c|cpp|h|hpp|py|js|ts|css|html|sh)$/i.test(filename)) {
+                blob.text().then(text => {
+                    document.getElementById('previewPanel').innerHTML = `${title}<pre>${escapeHtml(text)}</pre>`;
+                });
+                return `${title}<p class="muted">正在读取文本...</p>`;
+            }
+            return `${title}<p>此文件类型不能直接预览，请使用下载。</p><button onclick="downloadFile('${encodeArg(path)}','${encodeArg(filename)}')">下载</button>`;
+        }
+        function clearPreview() {
+            if (previewUrl) URL.revokeObjectURL(previewUrl);
+            previewUrl = '';
+            const panel = document.getElementById('previewPanel');
+            panel.style.display = 'none';
+            panel.innerHTML = '';
+        }
+        function joinPath(base, name) {
+            const cleanBase = normalizePath(base);
+            const cleanName = String(name).replace(/^\/+/, '');
+            return normalizeFilePath(cleanBase === '/' ? '/' + cleanName : cleanBase + cleanName);
+        }
+        function normalizePath(path) {
+            const parts = String(path || '/').split('/').filter(part => part && part !== '.');
+            const safeParts = [];
+            for (const part of parts) {
+                if (part === '..') safeParts.pop();
+                else safeParts.push(part);
+            }
+            return safeParts.length ? '/' + safeParts.join('/') + '/' : '/';
+        }
+        function normalizeFilePath(path) {
+            const parts = String(path || '/').split('/').filter(part => part && part !== '.');
+            const safeParts = [];
+            for (const part of parts) {
+                if (part === '..') safeParts.pop();
+                else safeParts.push(part);
+            }
+            return '/' + safeParts.join('/');
+        }
+        function guessMime(filename) {
+            const ext = filename.split('.').pop().toLowerCase();
+            const types = { pdf:'application/pdf', txt:'text/plain', log:'text/plain', md:'text/markdown', json:'application/json', csv:'text/csv', html:'text/html', htm:'text/html', xml:'text/xml', js:'text/javascript', css:'text/css', png:'image/png', jpg:'image/jpeg', jpeg:'image/jpeg', gif:'image/gif', webp:'image/webp', svg:'image/svg+xml', mp4:'video/mp4', webm:'video/webm', mp3:'audio/mpeg', wav:'audio/wav' };
+            return types[ext] || 'application/octet-stream';
+        }
+        function escapeHtml(value) {
+            return String(value).replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[ch]));
+        }
+        function escapeAttr(value) {
+            return escapeHtml(value).replace(/\\/g, '\\\\');
+        }
+        function encodeArg(value) {
+            return encodeURIComponent(String(value));
+        }
+        function decodeArg(value) {
+            try {
+                return decodeURIComponent(String(value));
+            } catch {
+                return String(value);
+            }
+        }
+    </script>
+</body>
+</html>
